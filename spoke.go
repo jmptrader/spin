@@ -39,11 +39,11 @@ func (spoke *Spoke) Leave() {
 }
 func (spoke *Spoke) Receive() ([]byte, bool) {
 	spoke.cond.L.Lock()
+	defer spoke.cond.L.Unlock()
 	for {
 		if len(spoke.messages) > 0 {
 			message := spoke.messages[0]
 			spoke.messages = spoke.messages[1:]
-			spoke.cond.L.Unlock()
 			return message, true
 		}
 		if spoke.closed {
@@ -51,7 +51,6 @@ func (spoke *Spoke) Receive() ([]byte, bool) {
 		}
 		spoke.cond.Wait()
 	}
-	spoke.cond.L.Unlock()
 	return nil, false
 }
 func (spoke *Spoke) Feedback(data []byte) {
