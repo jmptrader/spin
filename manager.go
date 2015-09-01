@@ -18,20 +18,16 @@ type feedbackT struct {
 	spoke *Spoke
 	data  []byte
 }
-
 type lockedT struct {
 	param    []byte
 	feedback [][]byte
 }
+type newT struct{ hub *Hub }
+type stopT struct{ hub *Hub }
+type lockT struct{ hub *Hub }
+type unlockT struct{ hub *Hub }
 
-var newC = make(chan *Hub)
-var stopC = make(chan *Hub)
-var lockC = make(chan *Hub)
-var unlockC = make(chan *Hub)
-var joinC = make(chan joinT)
-var leaveC = make(chan leaveT)
-var sendC = make(chan sendT)
-var feedbackC = make(chan feedbackT)
+var c = make(chan interface{})
 
 type spokesT struct {
 	locked   map[*Spoke]*lockedT
@@ -41,116 +37,114 @@ type spokesT struct {
 func init() {
 	go func() {
 		var hubs = make(map[*Hub]*spokesT)
-		for {
-			select {
-			case hub := <-newC:
-				hubs[hub] = &spokesT{
+		for c := range c {
+			switch c := c.(type) {
+			case newT:
+				hubs[c.hub] = &spokesT{
 					locked:   nil,
 					unlocked: make(map[*Spoke]bool),
 				}
-			case hub := <-stopC:
-				if spokes, ok := hubs[hub]; ok {
+			case stopT:
+				if spokes, ok := hubs[c.hub]; ok {
 					if spokes.locked != nil {
 						for spoke, _ := range spokes.locked {
-							close(spoke.messageC)
+							spoke.close()
 						}
 					}
 					for spoke, _ := range spokes.unlocked {
-						close(spoke.messageC)
-						if hub.config != nil && hub.config.Leave != nil {
-							hub.config.Leave(spoke)
+						spoke.close()
+						if c.hub.config != nil && c.hub.config.Leave != nil {
+							c.hub.config.Leave(spoke)
 						}
 					}
 				}
-				delete(hubs, hub)
-			case send := <-sendC:
-				if spokes, ok := hubs[send.hub]; ok {
+				delete(hubs, c.hub)
+			case sendT:
+				if spokes, ok := hubs[c.hub]; ok {
 					for spoke, _ := range spokes.unlocked {
-						spoke.messageC <- send.message
+						spoke.send(c.message)
 					}
 				}
-			case feedback := <-feedbackC:
-				feedback = feedback
-				// if spokes, ok := hubs[feedback.hub]; ok {
-				// 	if _, ok := spokes.unlocked[feedback.spoke]; ok {
-				// 		if feedback.hub.config != nil && feedback.hub.config.Feedback != nil {
-				// 			feedback.hub.config.Feedback(feedback.spoke, feedback.data)
-				// 		}
-				// 	} else if spokes.locked != nil {
-				// 		if locked, ok := spokes.locked[feedback.spoke]; ok {
-				// 			locked.feedback = append(locked.feedback, feedback.data)
-				// 		}
-				// 	}
-
-				// }
-			case hub := <-lockC:
-				if spokes, ok := hubs[hub]; ok {
+			case lockT:
+				if spokes, ok := hubs[c.hub]; ok {
 					if spokes.locked != nil {
 						panic("already locked")
 					}
 					spokes.locked = make(map[*Spoke]*lockedT)
 				}
-			case hub := <-unlockC:
-				if spokes, ok := hubs[hub]; ok {
+			case unlockT:
+				if spokes, ok := hubs[c.hub]; ok {
 					if spokes.locked == nil {
 						panic("not locked")
 					}
 					for spoke, locked := range spokes.locked {
 						var messages [][]byte
 						var allowed bool
-						if hub.config != nil && hub.config.Join != nil {
-							messages, allowed = hub.config.Join(spoke, locked.param)
+						if c.hub.config != nil && c.hub.config.Join != nil {
+							messages, allowed = c.hub.config.Join(spoke, locked.param)
 						}
 						if allowed {
 							spokes.unlocked[spoke] = true
 							for _, message := range messages {
-								spoke.messageC <- message
+								spoke.send(message)
 							}
-							// if hub.config != nil && hub.config.Feedback != nil {
-							// 	for _, feedback := range locked.feedback {
-							// 		hub.config.Feedback(spoke, feedback)
-							// 	}
-							// }
+							if c.hub.config != nil && c.hub.config.Feedback != nil {
+								for _, feedback := range locked.feedback {
+									c.hub.config.Feedback(spoke, feedback)
+								}
+							}
 						} else {
-							close(spoke.messageC)
+							spoke.close()
 						}
 					}
 					spokes.locked = nil
 				}
-			case join := <-joinC:
-				if spokes, ok := hubs[join.hub]; ok {
+			case feedbackT:
+				if spokes, ok := hubs[c.hub]; ok {
+					if _, ok := spokes.unlocked[c.spoke]; ok {
+						if c.hub.config != nil && c.hub.config.Feedback != nil {
+							c.hub.config.Feedback(c.spoke, c.data)
+						}
+					} else if spokes.locked != nil {
+						if locked, ok := spokes.locked[c.spoke]; ok {
+							locked.feedback = append(locked.feedback, c.data)
+						}
+					}
+				}
+			case joinT:
+				if spokes, ok := hubs[c.hub]; ok {
 					if spokes.locked != nil {
-						spokes.locked[join.spoke] = &lockedT{join.param, nil}
+						spokes.locked[c.spoke] = &lockedT{c.param, nil}
 					} else {
 						var messages [][]byte
 						var allowed bool
-						if join.hub.config != nil && join.hub.config.Join != nil {
-							messages, allowed = join.hub.config.Join(join.spoke, join.param)
+						if c.hub.config != nil && c.hub.config.Join != nil {
+							messages, allowed = c.hub.config.Join(c.spoke, c.param)
 						}
 						if allowed {
-							spokes.unlocked[join.spoke] = true
+							spokes.unlocked[c.spoke] = true
 							for _, message := range messages {
-								join.spoke.messageC <- message
+								c.spoke.send(message)
 							}
 						} else {
-							close(join.spoke.messageC)
+							c.spoke.close()
 						}
 					}
 				} else {
-					close(join.spoke.messageC)
+					c.spoke.close()
 				}
-			case leave := <-leaveC:
-				if spokes, ok := hubs[leave.hub]; ok {
-					if _, ok := spokes.unlocked[leave.spoke]; ok {
-						delete(spokes.unlocked, leave.spoke)
-						close(leave.spoke.messageC)
-						if leave.hub.config != nil && leave.hub.config.Leave != nil {
-							leave.hub.config.Leave(leave.spoke)
+			case leaveT:
+				if spokes, ok := hubs[c.hub]; ok {
+					if _, ok := spokes.unlocked[c.spoke]; ok {
+						delete(spokes.unlocked, c.spoke)
+						c.spoke.close()
+						if c.hub.config != nil && c.hub.config.Leave != nil {
+							c.hub.config.Leave(c.spoke)
 						}
 					} else if spokes.locked != nil {
-						if _, ok := spokes.locked[leave.spoke]; ok {
-							delete(spokes.locked, leave.spoke)
-							close(leave.spoke.messageC)
+						if _, ok := spokes.locked[c.spoke]; ok {
+							delete(spokes.locked, c.spoke)
+							c.spoke.close()
 						}
 					}
 				}

@@ -5,6 +5,7 @@ import (
 	"github.com/tidwall/spin"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestEasy(t *testing.T) {
@@ -19,7 +20,8 @@ func TestEasy(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			var messages [][]byte
-			joined, joinedMax := 0, 0
+			feedback, joined, joinedMax := 0, 0, 0
+
 			hub := spin.NewHub(&spin.Config{
 				Join: func(spoke *spin.Spoke, param []byte) ([][]byte, bool) {
 					joined++
@@ -30,11 +32,26 @@ func TestEasy(t *testing.T) {
 					joined--
 				},
 				Feedback: func(spoke *spin.Spoke, data []byte) {
-
+					feedback++
 				},
 			})
+			var wg3 sync.WaitGroup
+			wg3.Add(1)
 			go func() {
+				defer wg3.Done()
+				defer func() {
+					deadline := time.Now().Add(time.Second * 5)
+					for joined != 0 && time.Now().Before(deadline) {
+						time.Sleep(time.Millisecond * 10)
+					}
+				}()
 				defer hub.Stop()
+				defer func() {
+					deadline := time.Now().Add(time.Second * 5)
+					for joinedMax != spokeCount && time.Now().Before(deadline) {
+						time.Sleep(time.Millisecond * 10)
+					}
+				}()
 				for i := 0; i < messageCount; i++ {
 					hub.JoinLock()
 					msg := make([]byte, 8)
@@ -62,13 +79,17 @@ func TestEasy(t *testing.T) {
 							t.Fatalf("messages out of order")
 						}
 						n++
+						if n == 1 {
+							spoke.Feedback([]byte{2})
+						}
 					}
 					if n != messageCount {
 						t.Fatalf("wrong number of messages sent. %d != %d", n, messageCount)
 					}
-					//spoke.Feedback([]byte{2})
+
 				}()
 			}
+			wg3.Wait()
 			wg2.Wait()
 			if joinedMax != spokeCount {
 				t.Fatalf("wrong number of spokes joined. %d != %d", joinedMax, spokeCount)
@@ -76,7 +97,11 @@ func TestEasy(t *testing.T) {
 			if joined != 0 {
 				t.Fatalf("not all spokes left. %d != 0", joined)
 			}
+			if feedback != spokeCount*2 {
+				t.Fatalf("not all feedback sent. %d != %d", feedback, spokeCount*2)
+			}
 		}()
 	}
 	wg.Wait()
+	println(hubCount * spokeCount * messageCount)
 }
