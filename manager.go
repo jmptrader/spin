@@ -36,16 +36,16 @@ type spokesT struct {
 
 func init() {
 	go func() {
-		var hubs = make(map[*Hub]*spokesT)
+		var hubs = make(map[Id]*spokesT)
 		for c := range c {
 			switch c := c.(type) {
 			case newT:
-				hubs[c.hub] = &spokesT{
+				hubs[c.hub.Id] = &spokesT{
 					locked:   nil,
 					unlocked: make(map[*Spoke]bool),
 				}
 			case stopT:
-				if spokes, ok := hubs[c.hub]; ok {
+				if spokes, ok := hubs[c.hub.Id]; ok {
 					if spokes.locked != nil {
 						for spoke, _ := range spokes.locked {
 							spoke.close()
@@ -58,22 +58,22 @@ func init() {
 						}
 					}
 				}
-				delete(hubs, c.hub)
+				delete(hubs, c.hub.Id)
 			case sendT:
-				if spokes, ok := hubs[c.hub]; ok {
+				if spokes, ok := hubs[c.hub.Id]; ok {
 					for spoke, _ := range spokes.unlocked {
 						spoke.send(c.message)
 					}
 				}
 			case lockT:
-				if spokes, ok := hubs[c.hub]; ok {
+				if spokes, ok := hubs[c.hub.Id]; ok {
 					if spokes.locked != nil {
 						panic("already locked")
 					}
 					spokes.locked = make(map[*Spoke]*lockedT)
 				}
 			case unlockT:
-				if spokes, ok := hubs[c.hub]; ok {
+				if spokes, ok := hubs[c.hub.Id]; ok {
 					if spokes.locked == nil {
 						panic("not locked")
 					}
@@ -100,7 +100,7 @@ func init() {
 					spokes.locked = nil
 				}
 			case feedbackT:
-				if spokes, ok := hubs[c.hub]; ok {
+				if spokes, ok := hubs[c.hub.Id]; ok {
 					if _, ok := spokes.unlocked[c.spoke]; ok {
 						if c.hub.config != nil && c.hub.config.Feedback != nil {
 							c.hub.config.Feedback(c.spoke, c.data)
@@ -112,7 +112,7 @@ func init() {
 					}
 				}
 			case joinT:
-				if spokes, ok := hubs[c.hub]; ok {
+				if spokes, ok := hubs[c.hub.Id]; ok {
 					if spokes.locked != nil {
 						spokes.locked[c.spoke] = &lockedT{c.param, nil}
 					} else {
@@ -134,7 +134,7 @@ func init() {
 					c.spoke.close()
 				}
 			case leaveT:
-				if spokes, ok := hubs[c.hub]; ok {
+				if spokes, ok := hubs[c.hub.Id]; ok {
 					if _, ok := spokes.unlocked[c.spoke]; ok {
 						delete(spokes.unlocked, c.spoke)
 						c.spoke.close()
