@@ -1,109 +1,98 @@
 package spin
 
 import (
+	"bufio"
 	"errors"
-	"io"
 	"net"
-	"sync"
 	"time"
 )
 
 type TCPSpoke struct {
-	id      Id
-	conn    *net.TCPConn
-	m       *messenger
-	writeMu sync.Mutex
-	left    bool
+	id   Id
+	conn *net.TCPConn
+	rd   *bufio.Reader
 }
 
-func (spoke *TCPSpoke) close()                  { spoke.m.close() }
-func (spoke *TCPSpoke) send(message []byte)     { spoke.m.send(message) }
-func (spoke *TCPSpoke) Receive() ([]byte, bool) { return spoke.m.receive() }
-func (spoke *TCPSpoke) Id() Id                  { return spoke.id }
-func (spoke *TCPSpoke) Leave() {
-	spoke.writeMu.Lock()
-	if !spoke.left {
-		spoke.conn.Write([]byte{0xFE})
-		spoke.conn.Close()
-		spoke.close()
-		spoke.left = true
+func (spoke *TCPSpoke) Id() Id { return spoke.id }
+func (spoke *TCPSpoke) Receive() ([]byte, bool) {
+	for {
+		msg, err := readmsg(spoke.rd)
+		if err != nil {
+			return nil, false
+		}
+		if msg.leave {
+			spoke.Leave()
+			return nil, false
+		}
+		if !msg.ignore {
+			return msg.data, true
+		}
 	}
-	spoke.writeMu.Unlock()
+}
+func (spoke *TCPSpoke) Leave() {
+	write(spoke.conn, []byte{0xFE})
+	spoke.conn.Close()
 }
 func (spoke *TCPSpoke) Feedback(data []byte) {
-	spoke.writeMu.Lock()
-	writeMessage(spoke.conn, data)
-	spoke.writeMu.Unlock()
+	writemsg(spoke.conn, data)
 }
 
 func Dial(addr string, hubId Id, param []byte) (Spoke, error) {
-	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	connu, err := net.DialTimeout("tcp", addr, time.Second*5)
 	if err != nil {
 		return nil, err
 	}
-	spokeId, err := func() (spokeId Id, err error) {
-		conn.Write([]byte("HUB0"))
-		conn.Write(hubId.Bytes())
-		if param == nil {
-			conn.Write([]byte{0})
-		} else {
-			err := writeMessage(conn, param)
-			if err != nil {
-				return spokeId, err
+	var success int
+	conn := connu.(*net.TCPConn)
+	defer func() {
+		if success < 2 {
+			if success == 1 {
+				write(conn, []byte{0xFE})
 			}
+			conn.Close()
 		}
-		header := make([]byte, 4+idSize)
-		if _, err = io.ReadFull(conn, header); err != nil {
-			return spokeId, err
-		}
-		if header[0] != 'H' || header[1] != 'U' || header[2] != 'B' || header[3] != '0' {
-			return spokeId, errors.New("invalid header")
-		}
-		if !IsValidIdBytes(header[4:]) {
-			return spokeId, errors.New("invalid id bytes")
-		}
-		return IdBytes(header[4:]), nil
 	}()
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-	return newTCPSpoke(conn.(*net.TCPConn), spokeId), nil
-}
 
-func newTCPSpoke(conn *net.TCPConn, spokeId Id) *TCPSpoke {
-	spoke := &TCPSpoke{
-		id:   spokeId,
-		conn: conn,
-		m:    newMessenger(),
+	rd := bufio.NewReader(conn)
+
+	// write header 'HUB0'
+	if err := write(conn, []byte("HUB0")); err != nil {
+		return nil, err
 	}
-	go func() {
-		defer conn.Close()
-		go func() {
-			defer conn.Close()
-			for {
-				time.Sleep(time.Second)
-				spoke.writeMu.Lock()
-				_, err := conn.Write([]byte{0xFF})
-				spoke.writeMu.Unlock()
-				if err != nil {
-					return
-				}
-			}
-		}()
-		for {
-			message, ignore, leave, err := readMessage(conn)
-			if err != nil {
-				return
-			}
-			if leave {
-				spoke.Leave()
-				return
-			}
-			if !ignore {
-				spoke.send(message)
-			}
-		}
-	}()
-	return spoke
+
+	// read header 'HUB0'
+	header := make([]byte, 4)
+	if err := read(rd, header); err != nil {
+		return nil, err
+	}
+	if string(header) != "HUB0" {
+		return nil, errors.New("invalid header")
+	}
+	success++
+
+	// write hub id
+	if err := write(conn, hubId.Bytes()); err != nil {
+		return nil, err
+	}
+
+	// write param
+	if err := writemsg(conn, param); err != nil {
+		return nil, err
+	}
+
+	// read spoke id
+	spokeIdBytes := make([]byte, idSize)
+	if err := read(rd, spokeIdBytes); err != nil {
+		return nil, err
+	}
+	if !IsValidIdBytes(spokeIdBytes) {
+		return nil, errors.New("invalid id")
+	}
+	success++
+	spoke := &TCPSpoke{
+		id:   IdBytes(spokeIdBytes),
+		conn: conn,
+		rd:   rd,
+	}
+	return spoke, nil
 }

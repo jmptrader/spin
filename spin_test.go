@@ -10,7 +10,6 @@ import (
 )
 
 func TestBasicRemote(t *testing.T) {
-	return
 	const addr = ":9090"
 	ln, err := spin.Listen(addr)
 	if err != nil {
@@ -50,6 +49,7 @@ func TestBasicRemote(t *testing.T) {
 	spoke.Feedback([]byte("Feedback 1"))
 	spoke.Feedback([]byte("Feedback 2"))
 	spoke.Leave()
+
 	// wait a moment for the leave to register
 	deadline := time.Now().Add(time.Second)
 	for !left && time.Now().Before(deadline) {
@@ -79,7 +79,7 @@ func TestLocal(t *testing.T) {
 func TestRemote(t *testing.T) {
 	const (
 		hubCount     = 1
-		spokeCount   = 2
+		spokeCount   = 1
 		messageCount = 100000
 	)
 	testHubSpinner(t, ":9191", hubCount, spokeCount, messageCount)

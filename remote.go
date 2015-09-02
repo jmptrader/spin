@@ -1,11 +1,10 @@
 package spin
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"net"
-	"sync"
-	"time"
 )
 
 // Protocol
@@ -39,176 +38,158 @@ func Listen(addr string) (*Listener, error) {
 			if err != nil {
 				return
 			}
-			go handleConnection(conn.(*net.TCPConn))
+			go handle(conn.(*net.TCPConn))
 		}
 	}()
 	return ln, nil
 }
 
-func readMessage(r net.Conn) (message []byte, ignore bool, leave bool, err error) {
-	b := make([]byte, 1)
-	szb := make([]byte, 4)
-	var sz int
-	_, err = io.ReadFull(r, b)
-	if err != nil {
-		return nil, false, false, err
-	}
-	switch b[0] {
-	default:
-		return nil, false, false, errors.New("invalid size")
-	case 0xFF:
-		return nil, true, false, nil
-	case 0xFE:
-		return nil, false, true, nil
-	case 0:
-		return nil, false, false, nil
-	case 1:
-		_, err = io.ReadFull(r, szb[:1])
-		sz = int(szb[0])
-	case 2:
-		_, err = io.ReadFull(r, szb[:2])
-		sz = int(szb[0]) | int(szb[1])<<8
-	case 3:
-		_, err = io.ReadFull(r, szb[:3])
-		sz = int(szb[0]) | int(szb[1])<<8 | int(szb[2])<<16
-	}
-	if err != nil {
-		return nil, false, false, err
-	}
-	message = make([]byte, sz)
-	_, err = io.ReadFull(r, message)
-	if err != nil {
-		return nil, false, false, err
-	}
-	return message, false, false, nil
+func read(rd *bufio.Reader, p []byte) error {
+	_, err := io.ReadFull(rd, p)
+	return err
+}
+func write(conn *net.TCPConn, p []byte) error {
+	_, err := conn.Write(p)
+	return err
 }
 
-func bytesForSize(size int) []byte {
-	if size <= 0xFF {
-		return []byte{1, byte((size >> 0) & 0xFF)}
-	} else if size <= 0xFFFF {
-		return []byte{2, byte((size >> 0) & 0xFF), byte((size >> 8) & 0xFF)}
-	} else if size <= 0xFFFFFF {
-		return []byte{3, byte((size >> 0) & 0xFF), byte((size >> 8) & 0xFF), byte((size >> 16) & 0xFF)}
-	}
-	return nil
+type msgT struct {
+	ignore bool
+	leave  bool
+	data   []byte
 }
 
-func writeMessage(conn net.Conn, message []byte) error {
+func writemsg(conn *net.TCPConn, message []byte) error {
 	if message == nil {
-		_, err := conn.Write([]byte{0})
-		return err
+		return write(conn, []byte{0xFF})
 	}
-	bytes := bytesForSize(len(message))
-	if bytes == nil {
-		return errors.New("invalid message size")
+	msgSize := len(message)
+	if msgSize == 0 {
+		return write(conn, []byte{0x00})
 	}
-	_, err := conn.Write(bytes)
+	var err error
+	if msgSize <= 0xFF {
+		err = write(conn, []byte{0x01, byte(msgSize)})
+	} else if msgSize <= 0xFFFF {
+		err = write(conn, []byte{0x02, byte(msgSize & 0xFF), byte((msgSize >> 8) & 0xFF)})
+	} else if msgSize <= 0xFFFFFF {
+		err = write(conn, []byte{0x03, byte(msgSize & 0xFF), byte((msgSize >> 8) & 0xFF), byte((msgSize >> 16) & 0xFF)})
+	} else {
+		return errors.New("invalid message")
+	}
 	if err != nil {
 		return err
 	}
-	_, err = conn.Write(message)
-	if err != nil {
-		return err
-	}
-	return nil
+	return write(conn, message)
 }
 
-func handleConnection(conn *net.TCPConn) {
-	defer conn.Close()
-	err := func() error {
-		header := make([]byte, 4+idSize)
-		_, err := io.ReadFull(conn, header)
-		if err != nil {
-			return err
-		}
-		if header[0] != 'H' || header[1] != 'U' || header[2] != 'B' || header[3] != '0' {
-			return errors.New("invalid header")
-		}
-		_, err = conn.Write([]byte("HUB0"))
-		if err != nil {
-			return err
-		}
-		if !IsValidIdBytes(header[4:]) {
-			return errors.New("invalid id bytes")
-		}
-		id := IdBytes(header[4:])
-		t := findT{id, make(chan *Hub)}
-		c <- t
-		hub := <-t.c
-		if hub == nil {
-			return errors.New("hub not found")
-		}
-		param, _, _, err := readMessage(conn)
-		if err != nil {
-			return err
-		}
-		spoke := hub.Join(param).(*LocalSpoke)
-		var writeMu sync.Mutex
-		var smu sync.Mutex
-		var sleft bool
-		sleave := func() {
-			smu.Lock()
-			if !sleft {
-				writeMu.Lock()
-				conn.Write([]byte{0xFE})
-				writeMu.Unlock()
-				conn.Close()
-				spoke.Leave()
-				sleft = true
-			}
-			smu.Unlock()
-		}
-		defer sleave()
-
-		_, err = conn.Write(spoke.id.Bytes())
-		if err != nil {
-			return err
-		}
-
-		go func() {
-			defer sleave()
-			for {
-				time.Sleep(time.Second)
-				writeMu.Lock()
-				_, err = conn.Write([]byte{0xFF})
-				writeMu.Unlock()
-				if err != nil {
-					return
-				}
-			}
-		}()
-
-		go func() {
-			defer sleave()
-			for {
-				message, ignore, leave, err := readMessage(conn)
-				if err != nil || leave {
-					return
-				}
-				if !ignore {
-					spoke.Feedback(message)
-				}
-			}
-		}()
-
-		for {
-			message, ok := spoke.Receive()
-			if !ok {
-				break
-			}
-			writeMu.Lock()
-			err := writeMessage(conn, message)
-			writeMu.Unlock()
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}()
+func readmsg(rd *bufio.Reader) (*msgT, error) {
+	b, err := rd.ReadByte()
 	if err != nil {
-		println("err: " + err.Error())
+		return nil, err
+	}
+	var msgSize int
+	switch b {
+	case 0x00:
+		return &msgT{}, nil
+	case 0xFE:
+		return &msgT{leave: true}, nil
+	case 0xFF:
+		return &msgT{ignore: true}, nil
+	case 0x01, 0x02, 0x03:
+		for i := 0; i < int(b); i++ {
+			b, err := rd.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			msgSize = (msgSize << 8) | int(b)
+		}
+	default:
+		return nil, errors.New("invalid message")
+	}
+	msg := &msgT{data: make([]byte, msgSize)}
+	_, err = io.ReadFull(rd, msg.data)
+	return msg, err
+}
+
+func handle(conn *net.TCPConn) {
+	defer conn.Close()
+
+	rd := bufio.NewReader(conn)
+
+	// read header 'HUB0'
+	header := make([]byte, 4)
+	if err := read(rd, header); err != nil {
+		return
+	}
+	if string(header) != "HUB0" {
+		return
+	}
+	defer write(conn, []byte{0xFE})
+
+	// write header 'HUB0'
+	if err := write(conn, []byte("HUB0")); err != nil {
+		return
+	}
+
+	// read hub id
+	hubIdBytes := make([]byte, idSize)
+	if err := read(rd, hubIdBytes); err != nil {
+		return
+	}
+	if !IsValidIdBytes(hubIdBytes) {
+		return
+	}
+	hubId := IdBytes(hubIdBytes)
+
+	// read param
+	param, err := readmsg(rd)
+	if err != nil {
+		return
+	}
+
+	// find hub
+	t := findT{hubId, make(chan *Hub)}
+	c <- t
+	hub := <-t.c
+	if hub == nil {
+		return
+	}
+
+	// join
+	spoke := hub.Join(param.data)
+	defer spoke.Leave()
+
+	// write spoke id
+	err = write(conn, spoke.Id().Bytes())
+	if err != nil {
+		return
+	}
+
+	// feedback reader
+	go func() {
+		defer spoke.Leave()
+		for {
+			msg, err := readmsg(rd)
+			if err != nil || msg.leave {
+				return
+			}
+			if !msg.ignore {
+				spoke.Feedback(msg.data)
+			}
+		}
+	}()
+
+	// message writer
+	for {
+		message, ok := spoke.Receive()
+		if !ok {
+			return
+		}
+		err = writemsg(conn, message)
+		if err != nil {
+			return
+		}
 	}
 
 }

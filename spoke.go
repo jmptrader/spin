@@ -10,7 +10,7 @@ type Spoke interface {
 type LocalSpoke struct {
 	id  Id
 	hub *Hub
-	m   *messenger
+	m   *messengerT
 }
 
 func newLocalSpoke(hub *Hub) *LocalSpoke {
