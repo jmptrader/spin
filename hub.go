@@ -1,3 +1,6 @@
+// Copyright 2015 Joshua Baker <joshbaker77@gmail.com>. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 package spin
 
 type Config struct {
@@ -27,4 +30,10 @@ func (hub *Hub) Join(param []byte) Spoke {
 	spoke := newLocalSpoke(hub)
 	c <- joinT{hub, spoke, param}
 	return spoke
+}
+
+func FindHub(hubId Id) *Hub {
+	t := findT{hubId, make(chan *Hub)}
+	c <- t
+	return <-t.c
 }

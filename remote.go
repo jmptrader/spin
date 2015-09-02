@@ -1,3 +1,6 @@
+// Copyright 2015 Joshua Baker <joshbaker77@gmail.com>. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 package spin
 
 import (
@@ -173,10 +176,7 @@ func handle(conn *net.TCPConn) {
 		return
 	}
 
-	// find hub
-	t := findT{hubId, make(chan *Hub)}
-	c <- t
-	hub := <-t.c
+	hub := FindHub(hubId)
 	if hub == nil {
 		return
 	}
