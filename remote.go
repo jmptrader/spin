@@ -7,6 +7,17 @@ import (
 	"net"
 )
 
+const (
+	zeroByte   = 0x00
+	nilByte    = 0x01
+	leaveByte  = 0x02
+	ignoreByte = 0x03
+	oneByte    = 0x04
+	twoByte    = 0x05
+	threeByte  = 0x06
+	fourByte   = 0x07
+)
+
 // Protocol
 // ------------------------------------------
 // Client Header = 'HUB0'+HubId
@@ -59,14 +70,33 @@ type msgT struct {
 	data   []byte
 }
 
+// 11111111  11111111  11111111  11111111
+// 76543210  76543210  76543210  76543210
+// XXXXXXXX  XXXXXXXX  XXXXXXXX  XXXXXNNN
+//
 func writemsg(conn *net.TCPConn, message []byte) error {
 	if message == nil {
-		return write(conn, []byte{0xFF, 0x00, 0x00, 0x00, 0x00})
+		return write(conn, []byte{nilByte})
 	}
-	b := make([]byte, 5)
-	b[0] = 0x04
-	binary.LittleEndian.PutUint32(b[1:], uint32(len(message)))
-	err := write(conn, b)
+	if len(message) == 0 {
+		return write(conn, []byte{zeroByte})
+	}
+	var numByte = 0
+	if len(message) <= 0x1F {
+		numByte = 1
+	} else if len(message) <= 0x1FFF {
+		numByte = 2
+	} else if len(message) <= 0x1FFFFF {
+		numByte = 3
+	} else if len(message) <= 0x1FFFFFFF {
+		numByte = 4
+	} else {
+		return errors.New("invalid message")
+	}
+	var val = uint32(len(message)<<3) | uint32(oneByte+numByte-1)
+	var b = make([]byte, 4)
+	binary.LittleEndian.PutUint32(b, val)
+	err := write(conn, b[:numByte])
 	if err != nil {
 		return err
 	}
@@ -74,27 +104,34 @@ func writemsg(conn *net.TCPConn, message []byte) error {
 }
 
 func readmsg(conn *net.TCPConn) (*msgT, error) {
-	bp := make([]byte, 5)
-	if err := read(conn, bp); err != nil {
+	bp := make([]byte, 4)
+	if _, err := conn.Read(bp[:1]); err != nil {
 		return nil, err
 	}
-	switch bp[0] {
-	case 0x00:
+	n := int(bp[0] & 0x07)
+	switch n {
+	case zeroByte:
+		return &msgT{data: []byte{}}, nil
+	case nilByte:
 		return &msgT{}, nil
-	case 0xFE:
+	case leaveByte:
 		return &msgT{leave: true}, nil
-	case 0xFF:
+	case ignoreByte:
 		return &msgT{ignore: true}, nil
-	case 0x04:
-		n := int(binary.LittleEndian.Uint32(bp[1:]))
-		msg := &msgT{data: make([]byte, n)}
-		err := read(conn, msg.data)
-		if err != nil {
+	default:
+		n = n - oneByte + 1
+	}
+	if n > 1 {
+		if err := read(conn, bp[1:n]); err != nil {
 			return nil, err
 		}
-		return msg, nil
 	}
-	return nil, errors.New("invalid message")
+	val := int(binary.LittleEndian.Uint32(bp) >> 3)
+	data := make([]byte, val)
+	if err := read(conn, data); err != nil {
+		return nil, err
+	}
+	return &msgT{data: data}, nil
 }
 
 func handle(conn *net.TCPConn) {
@@ -108,7 +145,7 @@ func handle(conn *net.TCPConn) {
 	if string(header) != "HUB0" {
 		return
 	}
-	defer write(conn, []byte{0xFE, 0x00, 0x00, 0x00, 0x00})
+	defer write(conn, []byte{leaveByte})
 
 	// write header 'HUB0'
 	if err := write(conn, []byte("HUB0")); err != nil {
