@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const testTimeout = time.Second * 10
+
 func TestBasicRemote(t *testing.T) {
 	const addr = ":9090"
 	ln, err := spin.Listen(addr)
@@ -120,7 +122,7 @@ func testHubSpinner(t *testing.T, addr string, hubCount, spokeCount, messageCoun
 				defer wg3.Done()
 				// wait for a spokes to leave
 				defer func() {
-					deadline := time.Now().Add(time.Second * 5)
+					deadline := time.Now().Add(testTimeout)
 					for left != spokeCount && time.Now().Before(deadline) {
 						time.Sleep(time.Millisecond * 10)
 					}
@@ -128,14 +130,14 @@ func testHubSpinner(t *testing.T, addr string, hubCount, spokeCount, messageCoun
 				defer hub.Stop()
 				// wait for all feedback
 				defer func() {
-					deadline := time.Now().Add(time.Second * 5)
+					deadline := time.Now().Add(testTimeout)
 					for feedback != spokeCount*2 && time.Now().Before(deadline) {
 						time.Sleep(time.Millisecond * 10)
 					}
 				}()
 				// wait for all spokes to joined
 				defer func() {
-					deadline := time.Now().Add(time.Second * 5)
+					deadline := time.Now().Add(testTimeout)
 					for joined != spokeCount && time.Now().Before(deadline) {
 						time.Sleep(time.Millisecond * 10)
 					}
