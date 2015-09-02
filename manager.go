@@ -22,6 +22,11 @@ type lockedT struct {
 	param    []byte
 	feedback [][]byte
 }
+
+type findT struct {
+	id Id
+	c  chan *Hub
+}
 type newT struct{ hub *Hub }
 type stopT struct{ hub *Hub }
 type lockT struct{ hub *Hub }
@@ -30,6 +35,7 @@ type unlockT struct{ hub *Hub }
 var c = make(chan interface{})
 
 type spokesT struct {
+	hub      *Hub
 	locked   map[*Spoke]*lockedT
 	unlocked map[*Spoke]bool
 }
@@ -39,8 +45,15 @@ func init() {
 		var hubs = make(map[Id]*spokesT)
 		for c := range c {
 			switch c := c.(type) {
+			case findT:
+				if spokes, ok := hubs[c.id]; ok {
+					c.c <- spokes.hub
+				} else {
+					c.c <- nil
+				}
 			case newT:
 				hubs[c.hub.Id] = &spokesT{
+					hub:      c.hub,
 					locked:   nil,
 					unlocked: make(map[*Spoke]bool),
 				}

@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+func TestRemote(t *testing.T) {
+	spin.Listen(":9090")
+}
+
 func TestEasy(t *testing.T) {
 	const (
 		hubCount     = 10
@@ -103,5 +107,4 @@ func TestEasy(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	println(hubCount * spokeCount * messageCount)
 }

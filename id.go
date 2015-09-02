@@ -31,7 +31,7 @@ func IsValidIdString(s string) bool {
 	return true
 }
 
-func IsValidIdByte(b []byte) bool {
+func IsValidIdBytes(b []byte) bool {
 	return len(b) == idSize
 }
 
