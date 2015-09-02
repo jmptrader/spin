@@ -2,12 +2,12 @@ package spin
 
 type joinT struct {
 	hub   *Hub
-	spoke *Spoke
+	spoke *LocalSpoke
 	param []byte
 }
 type leaveT struct {
 	hub   *Hub
-	spoke *Spoke
+	spoke *LocalSpoke
 }
 type sendT struct {
 	hub     *Hub
@@ -15,7 +15,7 @@ type sendT struct {
 }
 type feedbackT struct {
 	hub   *Hub
-	spoke *Spoke
+	spoke *LocalSpoke
 	data  []byte
 }
 type lockedT struct {
@@ -36,8 +36,8 @@ var c = make(chan interface{})
 
 type spokesT struct {
 	hub      *Hub
-	locked   map[*Spoke]*lockedT
-	unlocked map[*Spoke]bool
+	locked   map[*LocalSpoke]*lockedT
+	unlocked map[*LocalSpoke]bool
 }
 
 func init() {
@@ -52,13 +52,13 @@ func init() {
 					c.c <- nil
 				}
 			case newT:
-				hubs[c.hub.Id] = &spokesT{
+				hubs[c.hub.id] = &spokesT{
 					hub:      c.hub,
 					locked:   nil,
-					unlocked: make(map[*Spoke]bool),
+					unlocked: make(map[*LocalSpoke]bool),
 				}
 			case stopT:
-				if spokes, ok := hubs[c.hub.Id]; ok {
+				if spokes, ok := hubs[c.hub.id]; ok {
 					if spokes.locked != nil {
 						for spoke, _ := range spokes.locked {
 							spoke.close()
@@ -71,22 +71,22 @@ func init() {
 						}
 					}
 				}
-				delete(hubs, c.hub.Id)
+				delete(hubs, c.hub.id)
 			case sendT:
-				if spokes, ok := hubs[c.hub.Id]; ok {
+				if spokes, ok := hubs[c.hub.id]; ok {
 					for spoke, _ := range spokes.unlocked {
 						spoke.send(c.message)
 					}
 				}
 			case lockT:
-				if spokes, ok := hubs[c.hub.Id]; ok {
+				if spokes, ok := hubs[c.hub.id]; ok {
 					if spokes.locked != nil {
 						panic("already locked")
 					}
-					spokes.locked = make(map[*Spoke]*lockedT)
+					spokes.locked = make(map[*LocalSpoke]*lockedT)
 				}
 			case unlockT:
-				if spokes, ok := hubs[c.hub.Id]; ok {
+				if spokes, ok := hubs[c.hub.id]; ok {
 					if spokes.locked == nil {
 						panic("not locked")
 					}
@@ -113,7 +113,7 @@ func init() {
 					spokes.locked = nil
 				}
 			case feedbackT:
-				if spokes, ok := hubs[c.hub.Id]; ok {
+				if spokes, ok := hubs[c.hub.id]; ok {
 					if _, ok := spokes.unlocked[c.spoke]; ok {
 						if c.hub.config != nil && c.hub.config.Feedback != nil {
 							c.hub.config.Feedback(c.spoke, c.data)
@@ -125,7 +125,7 @@ func init() {
 					}
 				}
 			case joinT:
-				if spokes, ok := hubs[c.hub.Id]; ok {
+				if spokes, ok := hubs[c.hub.id]; ok {
 					if spokes.locked != nil {
 						spokes.locked[c.spoke] = &lockedT{c.param, nil}
 					} else {
@@ -147,7 +147,7 @@ func init() {
 					c.spoke.close()
 				}
 			case leaveT:
-				if spokes, ok := hubs[c.hub.Id]; ok {
+				if spokes, ok := hubs[c.hub.id]; ok {
 					if _, ok := spokes.unlocked[c.spoke]; ok {
 						delete(spokes.unlocked, c.spoke)
 						c.spoke.close()

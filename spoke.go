@@ -1,58 +1,28 @@
 package spin
 
-import (
-	"sync"
-)
-
-type Spoke struct {
-	Id       Id
-	hub      *Hub
-	messages [][]byte
-	closed   bool
-	cond     *sync.Cond
+type Spoke interface {
+	Id() Id
+	Leave()
+	Receive() ([]byte, bool)
+	Feedback(data []byte)
 }
 
-func newSpoke(hub *Hub) *Spoke {
-	return &Spoke{
-		Id:   NewId(),
-		hub:  hub,
-		cond: sync.NewCond(&sync.Mutex{}),
+type LocalSpoke struct {
+	id  Id
+	hub *Hub
+	m   *messenger
+}
+
+func newLocalSpoke(hub *Hub) *LocalSpoke {
+	return &LocalSpoke{
+		id:  NewId(),
+		hub: hub,
+		m:   newMessenger(),
 	}
 }
-
-func (spoke *Spoke) close() {
-	spoke.cond.L.Lock()
-	spoke.closed = true
-	spoke.cond.Signal()
-	spoke.cond.L.Unlock()
-}
-
-func (spoke *Spoke) send(message []byte) {
-	spoke.cond.L.Lock()
-	spoke.messages = append(spoke.messages, message)
-	spoke.cond.Signal()
-	spoke.cond.L.Unlock()
-}
-
-func (spoke *Spoke) Leave() {
-	c <- leaveT{spoke.hub, spoke}
-}
-func (spoke *Spoke) Receive() ([]byte, bool) {
-	spoke.cond.L.Lock()
-	defer spoke.cond.L.Unlock()
-	for {
-		if len(spoke.messages) > 0 {
-			message := spoke.messages[0]
-			spoke.messages = spoke.messages[1:]
-			return message, true
-		}
-		if spoke.closed {
-			return nil, false
-		}
-		spoke.cond.Wait()
-	}
-	return nil, false
-}
-func (spoke *Spoke) Feedback(data []byte) {
-	c <- feedbackT{spoke.hub, spoke, data}
-}
+func (spoke *LocalSpoke) close()                  { spoke.m.close() }
+func (spoke *LocalSpoke) send(message []byte)     { spoke.m.send(message) }
+func (spoke *LocalSpoke) Receive() ([]byte, bool) { return spoke.m.receive() }
+func (spoke *LocalSpoke) Id() Id                  { return spoke.id }
+func (spoke *LocalSpoke) Leave()                  { c <- leaveT{spoke.hub, spoke} }
+func (spoke *LocalSpoke) Feedback(data []byte)    { c <- feedbackT{spoke.hub, spoke, data} }

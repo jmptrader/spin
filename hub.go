@@ -1,29 +1,30 @@
 package spin
 
 type Config struct {
-	Join     func(spoke *Spoke, param []byte) (messages [][]byte, allowed bool)
-	Leave    func(spoke *Spoke)
-	Feedback func(spoke *Spoke, data []byte)
+	Join     func(spoke Spoke, param []byte) (messages [][]byte, allowed bool)
+	Leave    func(spoke Spoke)
+	Feedback func(spoke Spoke, data []byte)
 }
 type Hub struct {
-	Id     Id
+	id     Id
 	config *Config
 }
 
 func NewHub(config *Config) *Hub {
 	hub := &Hub{
-		Id:     NewId(),
+		id:     NewId(),
 		config: config,
 	}
 	c <- newT{hub}
 	return hub
 }
+func (hub *Hub) Id() Id              { return hub.id }
 func (hub *Hub) Stop()               { c <- stopT{hub} }
 func (hub *Hub) Send(message []byte) { c <- sendT{hub, message} }
 func (hub *Hub) JoinLock()           { c <- lockT{hub} }
 func (hub *Hub) JoinUnlock()         { c <- unlockT{hub} }
-func (hub *Hub) Join(param []byte) *Spoke {
-	spoke := newSpoke(hub)
+func (hub *Hub) Join(param []byte) Spoke {
+	spoke := newLocalSpoke(hub)
 	c <- joinT{hub, spoke, param}
 	return spoke
 }

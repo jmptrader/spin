@@ -14,43 +14,102 @@ import (
 // Server Header = 'HUB0'+SpokeId
 // HubId,SpokeId = 16-byte Id
 // Messages = Type+SizeN+Size+Payload
-// Type = 1-bit, 0 = keepalive, 1 = message
-// SizeN = 7-bits, Number of bytes in Size, 0-3
-// Size = Payload Size
 
-var mu sync.Mutex
-var ln net.Listener
+type Listener struct {
+	tcp net.Listener
+}
 
-func Listen(addr string) error {
-	mu.Lock()
-	defer mu.Unlock()
-	if ln != nil {
-		return errors.New("already listening")
-	}
-	var err error
-	ln, err = net.Listen("tcp", addr)
+func (ln *Listener) Addr() net.Addr {
+	return ln.tcp.Addr()
+}
+
+func (ln *Listener) Close() error {
+	return ln.tcp.Close()
+}
+
+func Listen(addr string) (*Listener, error) {
+	tcp, err := net.Listen("tcp", addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	ln := &Listener{tcp}
 	go func() {
 		for {
-			conn, err := ln.Accept()
+			conn, err := ln.tcp.Accept()
 			if err != nil {
-
+				return
 			}
 			go handleConnection(conn.(*net.TCPConn))
 		}
 	}()
-	return nil
+	return ln, nil
 }
 
-func byteForSize(size int) []byte {
+func readMessage(r net.Conn) (message []byte, ignore bool, leave bool, err error) {
+	b := make([]byte, 1)
+	szb := make([]byte, 4)
+	var sz int
+	_, err = io.ReadFull(r, b)
+	if err != nil {
+		return nil, false, false, err
+	}
+	switch b[0] {
+	default:
+		return nil, false, false, errors.New("invalid size")
+	case 0xFF:
+		return nil, true, false, nil
+	case 0xFE:
+		return nil, false, true, nil
+	case 0:
+		return nil, false, false, nil
+	case 1:
+		_, err = io.ReadFull(r, szb[:1])
+		sz = int(szb[0])
+	case 2:
+		_, err = io.ReadFull(r, szb[:2])
+		sz = int(szb[0]) | int(szb[1])<<8
+	case 3:
+		_, err = io.ReadFull(r, szb[:3])
+		sz = int(szb[0]) | int(szb[1])<<8 | int(szb[2])<<16
+	}
+	if err != nil {
+		return nil, false, false, err
+	}
+	message = make([]byte, sz)
+	_, err = io.ReadFull(r, message)
+	if err != nil {
+		return nil, false, false, err
+	}
+	return message, false, false, nil
+}
+
+func bytesForSize(size int) []byte {
 	if size <= 0xFF {
 		return []byte{1, byte((size >> 0) & 0xFF)}
 	} else if size <= 0xFFFF {
 		return []byte{2, byte((size >> 0) & 0xFF), byte((size >> 8) & 0xFF)}
 	} else if size <= 0xFFFFFF {
 		return []byte{3, byte((size >> 0) & 0xFF), byte((size >> 8) & 0xFF), byte((size >> 16) & 0xFF)}
+	}
+	return nil
+}
+
+func writeMessage(conn net.Conn, message []byte) error {
+	if message == nil {
+		_, err := conn.Write([]byte{0})
+		return err
+	}
+	bytes := bytesForSize(len(message))
+	if bytes == nil {
+		return errors.New("invalid message size")
+	}
+	_, err := conn.Write(bytes)
+	if err != nil {
+		return err
+	}
+	_, err = conn.Write(message)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -80,20 +139,39 @@ func handleConnection(conn *net.TCPConn) {
 		if hub == nil {
 			return errors.New("hub not found")
 		}
-		spoke := newSpoke(hub)
-		defer spoke.Leave()
-		_, err = conn.Write(spoke.Id.Bytes())
+		param, _, _, err := readMessage(conn)
+		if err != nil {
+			return err
+		}
+		spoke := hub.Join(param).(*LocalSpoke)
+		var writeMu sync.Mutex
+		var smu sync.Mutex
+		var sleft bool
+		sleave := func() {
+			smu.Lock()
+			if !sleft {
+				writeMu.Lock()
+				conn.Write([]byte{0xFE})
+				writeMu.Unlock()
+				conn.Close()
+				spoke.Leave()
+				sleft = true
+			}
+			smu.Unlock()
+		}
+		defer sleave()
+
+		_, err = conn.Write(spoke.id.Bytes())
 		if err != nil {
 			return err
 		}
 
-		var writeMu sync.Mutex
 		go func() {
-			defer spoke.close()
+			defer sleave()
 			for {
 				time.Sleep(time.Second)
 				writeMu.Lock()
-				_, err = conn.Write([]byte{0})
+				_, err = conn.Write([]byte{0xFF})
 				writeMu.Unlock()
 				if err != nil {
 					return
@@ -102,36 +180,15 @@ func handleConnection(conn *net.TCPConn) {
 		}()
 
 		go func() {
-			defer spoke.close()
-			b := make([]byte, 1)
-			szb := make([]byte, 4)
+			defer sleave()
 			for {
-				var sz int
-				_, err := io.ReadFull(conn, b)
-				switch b[0] {
-				default:
+				message, ignore, leave, err := readMessage(conn)
+				if err != nil || leave {
 					return
-				case 0:
-					continue
-				case 1:
-					_, err = io.ReadFull(conn, szb[:1])
-					sz = int(szb[0])
-				case 2:
-					_, err = io.ReadFull(conn, szb[:2])
-					sz = int(szb[0]) | int(szb[1])<<8
-				case 3:
-					_, err = io.ReadFull(conn, szb[:3])
-					sz = int(szb[0]) | int(szb[1])<<8 | int(szb[2])<<16
 				}
-				if err != nil {
-					return // error
+				if !ignore {
+					spoke.Feedback(message)
 				}
-				message := make([]byte, sz)
-				_, err = io.ReadFull(conn, message)
-				if err != nil {
-					return // error
-				}
-				spoke.Feedback(message)
 			}
 		}()
 
@@ -140,20 +197,12 @@ func handleConnection(conn *net.TCPConn) {
 			if !ok {
 				break
 			}
-			bytes := byteForSize(len(message))
-			if bytes == nil {
-				return errors.New("invalid message size")
-			}
 			writeMu.Lock()
-			_, err = conn.Write(bytes)
-			if err != nil {
-				return err
-			}
-			_, err = conn.Write(message)
-			if err != nil {
-				return err
-			}
+			err := writeMessage(conn, message)
 			writeMu.Unlock()
+			if err != nil {
+				return err
+			}
 		}
 
 		return nil
