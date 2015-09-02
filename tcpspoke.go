@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"errors"
 	"net"
-	"time"
 )
 
 type TCPSpoke struct {
@@ -38,7 +37,7 @@ func (spoke *TCPSpoke) Feedback(data []byte) {
 }
 
 func Dial(addr string, hubId Id, param []byte) (Spoke, error) {
-	connu, err := net.DialTimeout("tcp", addr, time.Second*5)
+	connu, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
