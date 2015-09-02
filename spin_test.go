@@ -80,9 +80,9 @@ func TestLocal(t *testing.T) {
 
 func TestRemote(t *testing.T) {
 	const (
-		hubCount     = 10
-		spokeCount   = 100
-		messageCount = 1000
+		hubCount     = 5
+		spokeCount   = 25
+		messageCount = 5000
 	)
 	testHubSpinner(t, ":9191", hubCount, spokeCount, messageCount)
 }
