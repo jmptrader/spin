@@ -1,7 +1,6 @@
 package spin
 
 import (
-	"bufio"
 	"errors"
 	"net"
 	"time"
@@ -10,13 +9,12 @@ import (
 type TCPSpoke struct {
 	id   Id
 	conn *net.TCPConn
-	rd   *bufio.Reader
 }
 
 func (spoke *TCPSpoke) Id() Id { return spoke.id }
 func (spoke *TCPSpoke) Receive() ([]byte, bool) {
 	for {
-		msg, err := readmsg(spoke.rd)
+		msg, err := readmsg(spoke.conn)
 		if err != nil {
 			return nil, false
 		}
@@ -53,8 +51,6 @@ func Dial(addr string, hubId Id, param []byte) (Spoke, error) {
 		}
 	}()
 
-	rd := bufio.NewReader(conn)
-
 	// write header 'HUB0'
 	if err := write(conn, []byte("HUB0")); err != nil {
 		return nil, err
@@ -62,7 +58,7 @@ func Dial(addr string, hubId Id, param []byte) (Spoke, error) {
 
 	// read header 'HUB0'
 	header := make([]byte, 4)
-	if err := read(rd, header); err != nil {
+	if err := read(conn, header); err != nil {
 		return nil, err
 	}
 	if string(header) != "HUB0" {
@@ -82,7 +78,7 @@ func Dial(addr string, hubId Id, param []byte) (Spoke, error) {
 
 	// read spoke id
 	spokeIdBytes := make([]byte, idSize)
-	if err := read(rd, spokeIdBytes); err != nil {
+	if err := read(conn, spokeIdBytes); err != nil {
 		return nil, err
 	}
 	if !IsValidIdBytes(spokeIdBytes) {
@@ -92,7 +88,6 @@ func Dial(addr string, hubId Id, param []byte) (Spoke, error) {
 	spoke := &TCPSpoke{
 		id:   IdBytes(spokeIdBytes),
 		conn: conn,
-		rd:   rd,
 	}
 	return spoke, nil
 }

@@ -1,7 +1,6 @@
 package spin
 
 import (
-	"bufio"
 	"errors"
 	"io"
 	"net"
@@ -44,8 +43,8 @@ func Listen(addr string) (*Listener, error) {
 	return ln, nil
 }
 
-func read(rd *bufio.Reader, p []byte) error {
-	_, err := io.ReadFull(rd, p)
+func read(conn *net.TCPConn, p []byte) error {
+	_, err := io.ReadFull(conn, p)
 	return err
 }
 func write(conn *net.TCPConn, p []byte) error {
@@ -83,13 +82,14 @@ func writemsg(conn *net.TCPConn, message []byte) error {
 	return write(conn, message)
 }
 
-func readmsg(rd *bufio.Reader) (*msgT, error) {
-	b, err := rd.ReadByte()
-	if err != nil {
+func readmsg(conn *net.TCPConn) (*msgT, error) {
+	bp := make([]byte, 4)
+	if _, err := conn.Read(bp[:1]); err != nil {
 		return nil, err
 	}
+	n := int(bp[0])
 	var msgSize int
-	switch b {
+	switch n {
 	case 0x00:
 		return &msgT{}, nil
 	case 0xFE:
@@ -97,29 +97,26 @@ func readmsg(rd *bufio.Reader) (*msgT, error) {
 	case 0xFF:
 		return &msgT{ignore: true}, nil
 	case 0x01, 0x02, 0x03:
-		for i := 0; i < int(b); i++ {
-			b, err := rd.ReadByte()
-			if err != nil {
-				return nil, err
-			}
-			msgSize = (msgSize << 8) | int(b)
+		if err := read(conn, bp[:n]); err != nil {
+			return nil, err
+		}
+		for i := 0; i < n; i++ {
+			msgSize = (msgSize << 8) | int(bp[i])
 		}
 	default:
 		return nil, errors.New("invalid message")
 	}
 	msg := &msgT{data: make([]byte, msgSize)}
-	_, err = io.ReadFull(rd, msg.data)
+	err := read(conn, msg.data)
 	return msg, err
 }
 
 func handle(conn *net.TCPConn) {
 	defer conn.Close()
 
-	rd := bufio.NewReader(conn)
-
 	// read header 'HUB0'
 	header := make([]byte, 4)
-	if err := read(rd, header); err != nil {
+	if err := read(conn, header); err != nil {
 		return
 	}
 	if string(header) != "HUB0" {
@@ -134,7 +131,7 @@ func handle(conn *net.TCPConn) {
 
 	// read hub id
 	hubIdBytes := make([]byte, idSize)
-	if err := read(rd, hubIdBytes); err != nil {
+	if err := read(conn, hubIdBytes); err != nil {
 		return
 	}
 	if !IsValidIdBytes(hubIdBytes) {
@@ -143,7 +140,7 @@ func handle(conn *net.TCPConn) {
 	hubId := IdBytes(hubIdBytes)
 
 	// read param
-	param, err := readmsg(rd)
+	param, err := readmsg(conn)
 	if err != nil {
 		return
 	}
@@ -170,7 +167,7 @@ func handle(conn *net.TCPConn) {
 	go func() {
 		defer spoke.Leave()
 		for {
-			msg, err := readmsg(rd)
+			msg, err := readmsg(conn)
 			if err != nil || msg.leave {
 				return
 			}
