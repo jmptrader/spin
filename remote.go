@@ -19,11 +19,17 @@ const (
 )
 
 // Protocol
-// ------------------------------------------
-// Client Header = 'HUB0'+HubId
-// Server Header = 'HUB0'+SpokeId
-// HubId,SpokeId = 16-byte Id
-// Messages = Type+SizeN+Size+Payload
+// --------------------------------------------------------
+// Client Sends Header = 'HUB0'
+// Server Sends Header = 'HUB0'
+// Client Sends HubId = 16bytes
+// Client Sends Param Message
+// Server Sends SpokeId = 16bytes
+// Server <--> Client Messages
+// Message = Type+Size+Payload
+// Type = 3bits. Remaining 5bits belong to Size.
+// Size = 5-29bits determined by the Type.
+// Payload = Raw Bytes
 
 type Listener struct {
 	tcp net.Listener
@@ -73,7 +79,6 @@ type msgT struct {
 // 11111111  11111111  11111111  11111111
 // 76543210  76543210  76543210  76543210
 // XXXXXXXX  XXXXXXXX  XXXXXXXX  XXXXXNNN
-//
 func writemsg(conn *net.TCPConn, message []byte) error {
 	if message == nil {
 		return write(conn, []byte{nilByte})
