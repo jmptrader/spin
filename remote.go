@@ -1,6 +1,7 @@
 package spin
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -60,22 +61,12 @@ type msgT struct {
 
 func writemsg(conn *net.TCPConn, message []byte) error {
 	if message == nil {
-		return write(conn, []byte{0xFF})
+		return write(conn, []byte{0xFF, 0x00, 0x00, 0x00, 0x00})
 	}
-	msgSize := len(message)
-	if msgSize == 0 {
-		return write(conn, []byte{0x00})
-	}
-	var err error
-	if msgSize <= 0xFF {
-		err = write(conn, []byte{0x01, byte(msgSize)})
-	} else if msgSize <= 0xFFFF {
-		err = write(conn, []byte{0x02, byte(msgSize & 0xFF), byte((msgSize >> 8) & 0xFF)})
-	} else if msgSize <= 0xFFFFFF {
-		err = write(conn, []byte{0x03, byte(msgSize & 0xFF), byte((msgSize >> 8) & 0xFF), byte((msgSize >> 16) & 0xFF)})
-	} else {
-		return errors.New("invalid message")
-	}
+	b := make([]byte, 5)
+	b[0] = 0x04
+	binary.LittleEndian.PutUint32(b[1:], uint32(len(message)))
+	err := write(conn, b)
 	if err != nil {
 		return err
 	}
@@ -83,32 +74,27 @@ func writemsg(conn *net.TCPConn, message []byte) error {
 }
 
 func readmsg(conn *net.TCPConn) (*msgT, error) {
-	bp := make([]byte, 4)
-	if _, err := conn.Read(bp[:1]); err != nil {
+	bp := make([]byte, 5)
+	if err := read(conn, bp); err != nil {
 		return nil, err
 	}
-	n := int(bp[0])
-	var msgSize int
-	switch n {
+	switch bp[0] {
 	case 0x00:
 		return &msgT{}, nil
 	case 0xFE:
 		return &msgT{leave: true}, nil
 	case 0xFF:
 		return &msgT{ignore: true}, nil
-	case 0x01, 0x02, 0x03:
-		if err := read(conn, bp[:n]); err != nil {
+	case 0x04:
+		n := int(binary.LittleEndian.Uint32(bp[1:]))
+		msg := &msgT{data: make([]byte, n)}
+		err := read(conn, msg.data)
+		if err != nil {
 			return nil, err
 		}
-		for i := 0; i < n; i++ {
-			msgSize = (msgSize << 8) | int(bp[i])
-		}
-	default:
-		return nil, errors.New("invalid message")
+		return msg, nil
 	}
-	msg := &msgT{data: make([]byte, msgSize)}
-	err := read(conn, msg.data)
-	return msg, err
+	return nil, errors.New("invalid message")
 }
 
 func handle(conn *net.TCPConn) {
@@ -122,7 +108,7 @@ func handle(conn *net.TCPConn) {
 	if string(header) != "HUB0" {
 		return
 	}
-	defer write(conn, []byte{0xFE})
+	defer write(conn, []byte{0xFE, 0x00, 0x00, 0x00, 0x00})
 
 	// write header 'HUB0'
 	if err := write(conn, []byte("HUB0")); err != nil {

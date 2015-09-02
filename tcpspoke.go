@@ -27,7 +27,7 @@ func (spoke *TCPSpoke) Receive() ([]byte, bool) {
 	}
 }
 func (spoke *TCPSpoke) Leave() {
-	write(spoke.conn, []byte{0xFE})
+	write(spoke.conn, []byte{0xFE, 0x00, 0x00, 0x00, 0x00})
 	spoke.conn.Close()
 }
 func (spoke *TCPSpoke) Feedback(data []byte) {
@@ -44,7 +44,7 @@ func Dial(addr string, hubId Id, param []byte) (Spoke, error) {
 	defer func() {
 		if success < 2 {
 			if success == 1 {
-				write(conn, []byte{0xFE})
+				write(conn, []byte{0xFE, 0x00, 0x00, 0x00, 0x00})
 			}
 			conn.Close()
 		}
@@ -83,6 +83,7 @@ func Dial(addr string, hubId Id, param []byte) (Spoke, error) {
 	if !IsValidIdBytes(spokeIdBytes) {
 		return nil, errors.New("invalid id")
 	}
+
 	success++
 	spoke := &TCPSpoke{
 		id:   IdBytes(spokeIdBytes),
