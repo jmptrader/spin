@@ -53,6 +53,11 @@ func Dial(addr string, hubId Id, param []byte) (Spoke, error) {
 		}
 	}()
 
+	// write special http request line
+	if err := write(conn, httpHead); err != nil {
+		return nil, err
+	}
+
 	// write header 'HUB0'
 	if err := write(conn, []byte("HUB0")); err != nil {
 		return nil, err
