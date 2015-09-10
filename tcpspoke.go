@@ -5,6 +5,7 @@ package spin
 
 import (
 	"errors"
+	"io"
 	"net"
 )
 
@@ -35,6 +36,9 @@ func (spoke *TCPSpoke) Leave() {
 }
 func (spoke *TCPSpoke) Feedback(data []byte) {
 	writemsg(spoke.conn, data)
+}
+func (spoke *TCPSpoke) Reader() io.Reader {
+	return newSpokeReader(spoke)
 }
 
 func Dial(addr string, hubId Id, param []byte) (Spoke, error) {

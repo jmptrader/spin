@@ -3,11 +3,16 @@
 // license that can be found in the LICENSE file.
 package spin
 
+import (
+	"io"
+)
+
 type Spoke interface {
 	Id() Id
 	Leave()
 	Receive() ([]byte, bool)
 	Feedback(data []byte)
+	Reader() io.Reader
 }
 
 type LocalSpoke struct {
@@ -29,3 +34,4 @@ func (spoke *LocalSpoke) Receive() ([]byte, bool) { return spoke.m.receive() }
 func (spoke *LocalSpoke) Id() Id                  { return spoke.id }
 func (spoke *LocalSpoke) Leave()                  { c <- leaveT{spoke.hub, spoke} }
 func (spoke *LocalSpoke) Feedback(data []byte)    { c <- feedbackT{spoke.hub, spoke, data} }
+func (spoke *LocalSpoke) Reader() io.Reader       { return newSpokeReader(spoke) }

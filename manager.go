@@ -98,6 +98,8 @@ func init() {
 						var allowed bool
 						if c.hub.config != nil && c.hub.config.Join != nil {
 							messages, allowed = c.hub.config.Join(spoke, locked.param)
+						} else {
+							allowed = true
 						}
 						if allowed {
 							spokes.unlocked[spoke] = true
