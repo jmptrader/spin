@@ -5,101 +5,109 @@ package spin
 
 import (
 	"errors"
+	"github.com/gorilla/websocket"
 	"io"
-	"net"
+	"time"
 )
 
 type TCPSpoke struct {
 	id   Id
-	conn *net.TCPConn
+	ws   *websocket.Conn
+	msgC chan []byte
+	left bool
 }
 
 func (spoke *TCPSpoke) Id() Id { return spoke.id }
 func (spoke *TCPSpoke) Receive() ([]byte, bool) {
+	if spoke.left {
+		return nil, false
+	}
 	for {
-		msg, err := readmsg(spoke.conn)
+		msgt, msg, err := spoke.ws.ReadMessage()
 		if err != nil {
 			return nil, false
 		}
-		if msg.leave {
-			spoke.Leave()
-			return nil, false
-		}
-		if !msg.ignore {
-			return msg.data, true
+		if msgt == websocket.BinaryMessage {
+			return msg, true
 		}
 	}
 }
 func (spoke *TCPSpoke) Leave() {
-	write(spoke.conn, []byte{leaveByte})
-	spoke.conn.Close()
+	if spoke.left {
+		return
+	}
+	close(spoke.msgC)
+	spoke.ws.Close()
+	spoke.left = true
 }
 func (spoke *TCPSpoke) Feedback(data []byte) {
-	writemsg(spoke.conn, data)
+	if spoke.left {
+		return
+	}
+	spoke.msgC <- data
 }
 func (spoke *TCPSpoke) Reader() io.Reader {
 	return newSpokeReader(spoke)
 }
 
 func Dial(addr string, hubId Id, param []byte) (Spoke, error) {
-	connu, err := net.Dial("tcp", addr)
+	ws, _, err := websocket.DefaultDialer.Dial("ws://"+addr+Pattern, nil)
 	if err != nil {
 		return nil, err
 	}
-	var success int
-	conn := connu.(*net.TCPConn)
+	success := false
 	defer func() {
-		if success < 2 {
-			if success == 1 {
-				write(conn, []byte{leaveByte})
-			}
-			conn.Close()
+		if !success {
+			ws.Close()
 		}
 	}()
 
-	// write special http request line
-	if err := write(conn, httpHead); err != nil {
-		return nil, err
-	}
-
-	// write header 'HUB0'
-	if err := write(conn, []byte("HUB0")); err != nil {
-		return nil, err
-	}
-
-	// read header 'HUB0'
-	header := make([]byte, 4)
-	if err := read(conn, header); err != nil {
-		return nil, err
-	}
-	if string(header) != "HUB0" {
-		return nil, errors.New("invalid header")
-	}
-	success++
-
-	// write hub id
-	if err := write(conn, hubId.Bytes()); err != nil {
+	// write hubid
+	err = ws.WriteMessage(websocket.BinaryMessage, hubId.Bytes())
+	if err != nil {
 		return nil, err
 	}
 
 	// write param
-	if err := writemsg(conn, param); err != nil {
+	if param == nil {
+		err = ws.WriteMessage(websocket.TextMessage, []byte{})
+	} else {
+		err = ws.WriteMessage(websocket.BinaryMessage, param)
+	}
+	if err != nil {
 		return nil, err
 	}
 
 	// read spoke id
-	spokeIdBytes := make([]byte, idSize)
-	if err := read(conn, spokeIdBytes); err != nil {
-		return nil, err
+	msgt, msg, err := ws.ReadMessage()
+	if msgt != websocket.BinaryMessage {
+		return nil, errors.New("invalid spoke id type")
 	}
-	if !IsValidIdBytes(spokeIdBytes) {
+	if !IsValidIdBytes(msg) {
 		return nil, errors.New("invalid id")
 	}
 
-	success++
+	msgC := make(chan []byte)
+	go func() {
+		t1 := time.NewTicker(time.Second)
+		defer t1.Stop()
+		for {
+			select {
+			case <-t1.C:
+				ws.WriteMessage(websocket.TextMessage, []byte{})
+			case msg, ok := <-msgC:
+				if !ok {
+					return
+				}
+				ws.WriteMessage(websocket.BinaryMessage, msg)
+			}
+		}
+	}()
 	spoke := &TCPSpoke{
-		id:   IdBytes(spokeIdBytes),
-		conn: conn,
+		id:   IdBytes(msg),
+		ws:   ws,
+		msgC: msgC,
 	}
+	success = true
 	return spoke, nil
 }
