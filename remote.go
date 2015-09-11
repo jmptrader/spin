@@ -69,12 +69,16 @@ func socket(ws *websocket.Conn) error {
 	if err != nil {
 		return err
 	}
-	defer spoke.Leave()
+
+	defer func() {
+		spoke.Leave()
+	}()
 
 	msgC := make(chan []byte)
 	go func() {
 		defer func() {
 			close(msgC)
+			ws.Close()
 		}()
 		for {
 			msg, ok := spoke.Receive()
